@@ -1,0 +1,328 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原著精读助手</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}
+body{background:#f7f9fc;color:#222;padding:12px;max-width:1000px;margin:0 auto}
+nav{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+nav button{padding:8px 12px;border:none;background:#407bff;color:#fff;border-radius:8px;font-size:14px;cursor:pointer}
+nav button.gray{background:#b8c7e2}
+.panel{display:none;background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px #00000014}
+.panel.active{display:block}
+textarea,input[type="text"]{width:100%;padding:10px;border:1px solid #dce3f0;border-radius:8px;margin:8px 0;font-size:15px}
+button{padding:9px 14px;border:none;border-radius:8px;background:#407bff;color:#fff;cursor:pointer;font-size:14px;margin:4px}
+button.secondary{background:#e8edf7;color:#222}
+.word-card{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;padding:16px;border-radius:12px;box-shadow:0 4px 20px #00000026;z-index:99;width:90%;max-width:420px}
+.word-card h3{margin-bottom:8px}
+.word-card .close{float:right;background:#eee;color:#333}
+.read-text{line-height:1.8;font-size:17px}
+.read-text span{cursor:pointer;padding:1px 2px;border-radius:4px}
+.read-text span:hover{background:#e6f0ff}
+.item{padding:10px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.correct{background:#d9f7dd}
+.wrong{background:#ffe9e9}
+.option{display:block;width:100%;text-align:left;padding:10px;margin:6px 0;border:1px solid #dce3f0;border-radius:8px;background:#fff;cursor:pointer}
+.stats{margin:12px 0;padding:10px;background:#f0f5ff;border-radius:8px}
+</style>
+</head>
+<body>
+<nav>
+<button onclick="switchPanel('read')">📖阅读精读</button>
+<button onclick="switchPanel('wordbook')">📚生词本</button>
+<button onclick="switchPanel('review')">✍️单词复习</button>
+<button onclick="switchPanel('timer')">⏱专注&金币</button>
+</nav>
+
+<div id="read" class="panel active">
+<h2>原著精读</h2>
+<div>
+<h4>导入章节</h4>
+<input type="text" id="chapName" placeholder="章节名称，如Pride Ch1">
+<textarea id="chapText" rows="8" placeholder="粘贴英文原著文本，或者上传txt"></textarea>
+<input type="file" id="txtFile" accept=".txt">
+<button onclick="loadText()">加载文本</button>
+<button onclick="saveChap()">保存章节</button>
+</div>
+<div id="chapList"></div>
+<div style="margin-top:16px">
+<h4>阅读区</h4>
+<div id="readArea" class="read-text"></div>
+</div>
+</div>
+
+<div id="wordbook" class="panel">
+<h2>生词本</h2>
+<div id="wordList"></div>
+</div>
+
+<div id="review" class="panel">
+<h2>单词复习</h2>
+<div class="stats">今日复习：<span id="revToday">0</span>/50</div>
+<div>
+<button onclick="startReview(10)">本轮10词(+1金币)</button>
+<button onclick="startReview(20)">本轮20词(+2金币)</button>
+<button onclick="startReview(30)">本轮30词(+3金币)</button>
+</div>
+<div id="revArea"></div>
+</div>
+
+<div id="timer" class="panel">
+<h2>专注计时 & 金币</h2>
+<div class="stats">金币余额：<span id="coin">0</span></div>
+<div class="stats">连续打卡：<span id="streak">0</span> 天</div>
+<div id="timerBox">
+<div>已计时：<span id="timeShow">00:00</span></div>
+<button onclick="startTimer()">开始专注</button>
+<button onclick="pauseTimer()">暂停</button>
+<button onclick="endTimer()">结束结算</button>
+</div>
+<div style="margin-top:16px">
+<h4>自定义奖励兑换</h4>
+<input type="text" id="rewardName" placeholder="奖励名称">
+<input type="text" id="rewardPrice" placeholder="金币价格">
+<button onclick="addReward()">新增奖励</button>
+<div id="rewardList"></div>
+<div id="exchangeLog"></div>
+</div>
+<div style="margin-top:12px">
+<button class="secondary" onclick="exportData()">导出备份</button>
+<button class="secondary" onclick="importData()">导入备份</button>
+<input type="file" id="importFile" accept=".json" style="display:none">
+</div>
+</div>
+
+<div id="wordPopup" class="word-card" style="display:none">
+<button class="close" onclick="closePopup()">×</button>
+<h3 id="popWord"></h3>
+<p>音标：<span id="popPhonetic"></span></p>
+<p>释义：<span id="popDef"></span></p>
+<p>原句：<span id="popSent"></span></p>
+<input type="text" id="popCn" placeholder="补录中文释义（用于复习）">
+<button onclick="speakWord()">🔊发音</button>
+<button onclick="addWord()">⭐加入生词本</button>
+</div>
+
+<script>
+let data = JSON.parse(localStorage.getItem("readerData")) || {
+  chapters:[], words:[], coin:0, streak:0, lastCheckIn:"",
+  timer:{running:false,paused:false,start:0,accum:0},
+  revToday:0, rewards:[], exchangeLog:[]
+};
+let currentReview = {list:[],idx:0,correct:0};
+let currentWord = null;
+let timerInt = null;
+
+function save(){localStorage.setItem("readerData",JSON.stringify(data))}
+function switchPanel(id){document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));document.getElementById(id).classList.add("active")}
+
+// 阅读
+function loadText(){
+  const txt = document.getElementById("chapText").value.trim();
+  const area = document.getElementById("readArea");
+  area.innerHTML = "";
+  const tokens = txt.split(/(\s+|[,.!?;:"'()])/);
+  tokens.forEach(t=>{
+    if(/^[a-zA-Z]+$/.test(t)){
+      const sp = document.createElement("span");
+      sp.innerText = t;
+      sp.onclick=()=>queryWord(t,txt);
+      area.appendChild(sp);
+    }else{
+      area.appendChild(document.createTextNode(t));
+    }
+  })
+}
+document.getElementById("txtFile").onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const t=await f.text();document.getElementById("chapText").value=t;loadText()
+}
+function saveChap(){
+  const name=document.getElementById("chapName").value.trim();
+  const text=document.getElementById("chapText").value.trim();
+  if(!name||!text)return alert("填名称和文本");
+  data.chapters.push({name,text});save();renderChaps()
+}
+function renderChaps(){
+  const wrap=document.getElementById("chapList");wrap.innerHTML="";
+  data.chapters.forEach((c,i)=>{
+    const d=document.createElement("div");d.className="item";
+    d.innerHTML=`${c.name} <button class="secondary" onclick="loadChap(${i})">加载</button>
+    <button class="secondary" onclick="delChap(${i})">删除</button>`;wrap.appendChild(d)
+  })
+}
+function loadChap(i){
+  const c=data.chapters[i];
+  document.getElementById("chapName").value=c.name;
+  document.getElementById("chapText").value=c.text;loadText()
+}
+function delChap(i){data.chapters.splice(i,1);save();renderChaps()}
+
+// 词典 & 生词
+async function queryWord(word,sent){
+  currentWord={word,sent,cn:""};
+  const res=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+  const info=await res.json();
+  let phon="",def="";
+  if(info[0]){
+    phon=info[0].phonetic||(info[0].phonetics[0]?.text);
+    def=info[0].meanings[0]?.definitions[0]?.definition||"";
+  }
+  document.getElementById("popWord").innerText=word;
+  document.getElementById("popPhonetic").innerText=phon;
+  document.getElementById("popDef").innerText=def;
+  document.getElementById("popSent").innerText=sent;
+  document.getElementById("popCn").value="";
+  document.getElementById("wordPopup").style.display="block";
+}
+function closePopup(){document.getElementById("wordPopup").style.display="none"}
+function speakWord(){
+  const u=new SpeechSynthesisUtterance(currentWord.word);u.lang="en-US";speechSynthesis.speak(u)
+}
+function addWord(){
+  const cn=document.getElementById("popCn").value.trim();
+  const exist=data.words.find(w=>w.word===currentWord.word);
+  if(!exist){
+    data.words.push({word:currentWord.word,sent:currentWord.sent,cn,reviewed:false,wrong:0});
+    save();renderWords()
+  }else alert("已在生词本");
+  closePopup()
+}
+function renderWords(){
+  const wrap=document.getElementById("wordList");wrap.innerHTML="";
+  data.words.forEach((w,i)=>{
+    const d=document.createElement("div");d.className="item";
+    d.innerHTML=`${w.word}｜${w.cn||"未补中文"} <br><small>原句：${w.sent.slice(0,60)}...</small>
+    <button class="secondary" onclick="delWord(${i})">移除</button>`;wrap.appendChild(d)
+  })
+}
+function delWord(i){data.words.splice(i,1);save();renderWords()}
+
+// 复习
+function startReview(total){
+  if(data.revToday>=50)return alert("今日复习上限50词");
+  const pool=data.words.filter(x=>x.cn);
+  if(pool.length<10)return alert("至少10条带中文释义的生词");
+  const reviewed=pool.filter(x=>x.reviewed);
+  const neww=pool.filter(x=>!x.reviewed);
+  let list=[];
+  const oldNum=Math.floor(total*0.6);
+  const newNum=total-oldNum;
+  reviewed.sort((a,b)=>b.wrong-a.wrong);
+  list.push(...reviewed.slice(0,oldNum));
+  if(list.length<total) list.push(...neww.slice(0,total-list.length));
+  while(list.length<total) list.push(...pool);
+  list=list.slice(0,total);
+  currentReview={list,idx:0,correct:0};
+  renderReview();
+}
+function renderReview(){
+  const wrap=document.getElementById("revArea");
+  const item=currentReview.list[currentReview.idx];
+  if(!item){
+    const add={10:1,20:2,30:3}[currentReview.list.length];
+    data.coin+=add;data.revToday+=currentReview.list.length;save();updateUI();
+    wrap.innerHTML=`<h3>本轮完成！+${add}金币</h3>`;return
+  }
+  const others=data.words.filter(x=>x.cn&&x.word!==item.word).map(x=>x.cn);
+  const opts=[item.cn];
+  while(opts.length<4&&others.length) opts.push(others.splice(Math.floor(Math.random()*others.length),1)[0]);
+  while(opts.length<4) opts.push("随机释义"+Math.random());
+  opts.sort(()=>Math.random()-0.5);
+  wrap.innerHTML=`<h3>${item.word}</h3>
+  ${opts.map(o=>`<button class="option" onclick="checkAnswer('${o}')">${o}</button>`).join("")}`
+}
+function checkAnswer(sel){
+  const item=currentReview.list[currentReview.idx];
+  if(sel===item.cn){item.reviewed=true;item.wrong=0;currentReview.correct++}
+  else {item.wrong+=1}
+  save();currentReview.idx++;renderReview()
+}
+
+// 计时金币
+function startTimer(){
+  if(data.timer.running)return;
+  data.timer.running=true;data.timer.paused=false;
+  data.timer.start=Date.now()-data.timer.accum;
+  timerInt=setInterval(updateTimerShow,1000);save()
+}
+function pauseTimer(){
+  data.timer.paused=true;data.timer.running=false;clearInterval(timerInt);save()
+}
+function updateTimerShow(){
+  const ms=Date.now()-data.timer.start;
+  data.timer.accum=ms;
+  const s=Math.floor(ms/1000);
+  const m=Math.floor(s/60);
+  const sec=s%60;
+  document.getElementById("timeShow").innerText=`${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`
+}
+function endTimer(){
+  clearInterval(timerInt);
+  const sec=data.timer.accum/1000;
+  const min=sec/60;
+  let gain=0;
+  if(min>=10){
+    gain=10 + Math.floor((min-10)/5)*10;
+    const today=new Date().toDateString();
+    if(data.lastCheckIn!==today){
+      data.lastCheckIn=today;
+      data.streak+=1;
+      if(data.streak%7===0) data.coin+=10;
+    }
+  }
+  data.coin+=gain;
+  alert(`本次获得${gain}金币`);
+  data.timer={running:false,paused:false,start:0,accum:0};
+  save();updateUI()
+}
+function updateUI(){
+  document.getElementById("coin").innerText=data.coin;
+  document.getElementById("streak").innerText=data.streak;
+  document.getElementById("revToday").innerText=data.revToday;
+  renderChaps();renderWords();renderReward()
+}
+
+// 兑换
+function addReward(){
+  const n=document.getElementById("rewardName").value.trim();
+  const p=Number(document.getElementById("rewardPrice").value);
+  if(!n||!p)return;
+  data.rewards.push({name:n,price:p});save();renderReward()
+}
+function renderReward(){
+  const wrap=document.getElementById("rewardList");wrap.innerHTML="";
+  data.rewards.forEach((r,i)=>{
+    const d=document.createElement("div");d.className="item";
+    d.innerHTML=`${r.name} ${r.price}金币 <button class="secondary" onclick="exchange(${i})">兑换</button>`;wrap.appendChild(d)
+  })
+}
+function exchange(i){
+  const r=data.rewards[i];
+  if(data.coin<r.price)return alert("金币不足");
+  data.coin-=r.price;
+  data.exchangeLog.push({time:new Date().toLocaleString(),item:r.name});
+  save();updateUI()
+}
+
+// 备份
+function exportData(){
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="精读备份.json";a.click()
+}
+document.getElementById("importFile").onchange=async e=>{
+  const f=e.target.files[0];
+  const t=await f.text();data=JSON.parse(t);save();updateUI()
+}
+function importData(){document.getElementById("importFile").click()}
+
+updateUI();
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden&&data.timer.running) pauseTimer()
+})
+</script>
+</body>
+</html>
